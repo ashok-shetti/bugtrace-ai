@@ -1,16 +1,19 @@
 """
-LLM Prompt Assembly and Structured Inference Module for BugTrace AI.
+LLM Prompt Assembly and Structured Inference Module for BugTrace AI using Google Gemini.
 
 Formats retrieved historical bug contexts, injects strict grounding system prompts,
-and calls OpenAI Structured Outputs to produce type-safe BugDiagnosisResponse objects.
+and calls Gemini Structured Outputs to produce type-safe BugDiagnosisResponse objects.
 """
 
+import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
 from .schemas import BugDiagnosisResponse, ReferencedBug
 
@@ -22,64 +25,72 @@ logger = logging.getLogger("BugDiagnoser")
 
 class BugDiagnoser:
     """
-    Manages prompt formatting and LLM inference for grounded bug diagnosis.
+    Manages prompt formatting and LLM inference for grounded bug diagnosis with Google Gemini.
     """
 
-    DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
-    SYSTEM_PROMPT = """You are a Principal Site Reliability & Debugging Engineer.
-Analyze the user's reported bug/stack trace using ONLY the provided historical closed issues from this repository.
-If the retrieved context does not provide sufficient evidence to resolve the issue, explicitly state that in the summary and lower the confidence score.
-Do NOT invent proprietary library behaviors.
-Provide actionable, code-level recommendations and clearly reference the historical issue numbers that support your diagnosis."""
+    SYSTEM_INSTRUCTION = (
+        "You are a Principal Site Reliability & Debugging Engineer. Analyze the user's reported error "
+        "using ONLY the provided historical closed issues. If the retrieved context does not "
+        "provide sufficient evidence, state that in the summary and set confidence low. "
+        "Do NOT hallucinate fixes."
+    )
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = DEFAULT_MODEL,
+        model: Optional[str] = None,
         temperature: float = 0.1,
     ):
         """
-        Initialize the BugDiagnoser.
+        Initialize the BugDiagnoser with Gemini client.
 
         Args:
-            api_key: Optional OpenAI API key (defaults to OPENAI_API_KEY from environment).
-            model: OpenAI model name (default: gpt-4o-mini).
+            api_key: Optional Gemini API key (defaults to GEMINI_API_KEY from environment).
+            model: Gemini model name (default: gemini-3.6-flash or GEMINI_MODEL env).
             temperature: Sampling temperature for inference (default: 0.1).
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.model = model or os.getenv("GEMINI_MODEL", self.DEFAULT_MODEL)
         self.temperature = temperature
-        self._client: Optional[OpenAI] = None
+        self._client: Optional[genai.Client] = None
 
         if not self.has_valid_api_key():
             logger.warning(
-                "No valid OPENAI_API_KEY detected. Set OPENAI_API_KEY in .env for live LLM diagnosis."
+                "No valid GEMINI_API_KEY detected. Set GEMINI_API_KEY in .env for live LLM diagnosis."
             )
 
     def has_valid_api_key(self) -> bool:
         """
-        Check if a non-placeholder OpenAI API key is present.
+        Check if a non-placeholder Gemini API key is present.
         """
         return bool(
             self.api_key
             and self.api_key.strip()
             and not self.api_key.startswith("your_")
-            and self.api_key != "your_openai_api_key_here"
+            and self.api_key != "your_free_google_ai_studio_api_key_here"
         )
 
     @property
-    def client(self) -> OpenAI:
+    def client(self) -> genai.Client:
         """
-        Lazy-initialize and return OpenAI client.
+        Lazy-initialize and return Gemini client.
         """
         if self._client is None:
             if not self.has_valid_api_key():
                 raise ValueError(
-                    "Cannot initialize OpenAI client: OPENAI_API_KEY is missing or invalid in .env."
+                    "Cannot initialize Gemini client: GEMINI_API_KEY is missing or invalid in .env."
                 )
-            self._client = OpenAI(api_key=self.api_key.strip())
+            self._client = genai.Client(api_key=self.api_key.strip())
         return self._client
+
+    @client.setter
+    def client(self, client_instance: genai.Client):
+        """
+        Explicit client setter for mocking and dependency injection.
+        """
+        self._client = client_instance
 
     @staticmethod
     def format_context(retrieved_bugs: List[Dict[str, Any]]) -> str:
@@ -105,7 +116,7 @@ Provide actionable, code-level recommendations and clearly reference the histori
             block = (
                 f"[HISTORICAL BUG #{issue_num}]: {title}\n"
                 f"Labels: {labels}\n"
-                f"Context & Fix Details:\n"
+                f"Details & Resolution:\n"
                 f"{body}\n"
                 f"----------------------------------------"
             )
@@ -120,12 +131,12 @@ Provide actionable, code-level recommendations and clearly reference the histori
         mock_mode: bool = False,
     ) -> BugDiagnosisResponse:
         """
-        Generate a structured bug diagnosis using OpenAI Structured Outputs.
+        Generate a structured bug diagnosis using Gemini Structured Outputs.
 
         Args:
             query: User's reported bug description or error stack trace.
             retrieved_bugs: Ranked candidate issues from HybridRetriever.
-            mock_mode: If True, returns a deterministic offline mock response without calling OpenAI.
+            mock_mode: If True, returns a deterministic offline mock response without calling Gemini.
 
         Returns:
             BugDiagnosisResponse Pydantic model.
@@ -136,34 +147,43 @@ Provide actionable, code-level recommendations and clearly reference the histori
             logger.info("Using offline diagnosis generation (mock mode or missing API key).")
             return self._generate_offline_diagnosis(query, retrieved_bugs)
 
-        user_content = (
-            f"USER REPORTED BUG / STACK TRACE:\n"
-            f"{query.strip()}\n\n"
-            f"RETRIEVED HISTORICAL REPOSITORY ISSUES:\n"
-            f"{formatted_context}\n\n"
-            f"Please diagnose the root cause and provide the recommended fix based strictly on the historical issues."
-        )
+        prompt = f"### USER ERROR QUERY:\n{query.strip()}\n\n### RETRIEVED HISTORICAL ISSUES:\n{formatted_context}"
 
-        logger.info(
-            f"Calling OpenAI Structured Outputs ({self.model}, temp={self.temperature}) for query: '{query[:40]}...'"
-        )
+        models_to_try = [self.model]
+        for fallback in ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-flash-latest"]:
+            if fallback not in models_to_try:
+                models_to_try.append(fallback)
 
-        try:
-            completion = self.client.beta.chat.completions.parse(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                response_format=BugDiagnosisResponse,
-                temperature=self.temperature,
-            )
-            parsed_response: BugDiagnosisResponse = completion.choices[0].message.parsed
-            return parsed_response
+        last_error = None
+        for current_model in models_to_try:
+            try:
+                logger.info(
+                    f"Calling Gemini Structured Outputs ({current_model}, temp={self.temperature}) for query: '{query[:40]}...'"
+                )
+                response = self.client.models.generate_content(
+                    model=current_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self.SYSTEM_INSTRUCTION,
+                        temperature=self.temperature,
+                        response_mime_type="application/json",
+                        response_schema=BugDiagnosisResponse,
+                    ),
+                )
 
-        except Exception as e:
-            logger.error(f"OpenAI API call failed: {e}. Falling back to grounded rule-based summary.")
-            return self._generate_offline_diagnosis(query, retrieved_bugs, error_note=str(e))
+                raw_text = response.text or ""
+                # Strip markdown code fencing if Gemini wraps JSON in ```json ... ```
+                cleaned_text = re.sub(r"^```(?:json)?\s*", "", raw_text.strip(), flags=re.IGNORECASE)
+                cleaned_text = re.sub(r"\s*```$", "", cleaned_text.strip())
+
+                return BugDiagnosisResponse.model_validate_json(cleaned_text)
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Gemini API call with '{current_model}' failed: {e}. Attempting next model...")
+
+        logger.error(f"All Gemini models failed. Last error: {last_error}. Falling back to grounded rule-based summary.")
+        return self._generate_offline_diagnosis(query, retrieved_bugs, error_note=str(last_error))
 
     def _generate_offline_diagnosis(
         self,
@@ -186,7 +206,6 @@ Provide actionable, code-level recommendations and clearly reference the histori
         top_bug = retrieved_bugs[0]
         top_num = top_bug.get("issue_number", 0)
         top_title = top_bug.get("title", "")
-        top_body = top_bug.get("body", "")
 
         referenced = [
             ReferencedBug(

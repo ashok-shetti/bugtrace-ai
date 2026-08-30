@@ -1,7 +1,7 @@
 """
 Standalone Verification Script for BugTrace AI Diagnostic Engine.
 
-Runs end-to-end bug diagnosis: Hybrid Retrieval (RRF) -> Prompt Grounding -> OpenAI Structured Outputs.
+Runs end-to-end bug diagnosis: Hybrid Retrieval (RRF) -> Prompt Grounding -> Google Gemini Structured Outputs.
 """
 
 import argparse
@@ -9,6 +9,12 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
+
+# Reconfigure stdout/stderr to utf-8 for Windows emoji compatibility
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # Add workspace root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -115,13 +121,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mock-llm",
         action="store_true",
-        help="Force offline deterministic mock mode (does not call OpenAI API)",
+        help="Force offline deterministic mock mode (does not call Gemini API)",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o-mini",
-        help="OpenAI model identifier for Structured Outputs",
+        default="gemini-3.6-flash",
+        help="Gemini model identifier for Structured Outputs",
     )
     return parser.parse_args()
 

@@ -34,7 +34,7 @@ class DiagnoseRequest(BaseModel):
     )
     mock_llm: bool = Field(
         default=False,
-        description="Force offline mock LLM mode for testing/demo environments without OpenAI credits",
+        description="Force offline mock LLM mode for testing/demo environments without Gemini API key",
     )
 
 

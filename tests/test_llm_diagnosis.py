@@ -87,7 +87,7 @@ class TestBugDiagnoser(unittest.TestCase):
         self.assertEqual(response.referenced_issues[0].issue_number, 100)
         self.assertGreaterEqual(response.confidence_score, 0.8)
 
-    def test_diagnose_mock_openai_api_call(self):
+    def test_diagnose_mock_gemini_api_call(self):
         mock_parsed_response = BugDiagnosisResponse(
             summary="Pydantic model validation failure due to missing field.",
             root_cause_analysis="FastAPI expects required body fields unless explicitly marked with default or Optional.",
@@ -98,13 +98,14 @@ class TestBugDiagnoser(unittest.TestCase):
             confidence_score=0.95,
         )
 
-        mock_choice = MagicMock()
-        mock_choice.message.parsed = mock_parsed_response
-        mock_completion = MagicMock()
-        mock_completion.choices = [mock_choice]
+        mock_response = MagicMock()
+        mock_response.text = mock_parsed_response.model_dump_json()
+
+        mock_models = MagicMock()
+        mock_models.generate_content.return_value = mock_response
 
         mock_client = MagicMock()
-        mock_client.beta.chat.completions.parse.return_value = mock_completion
+        mock_client.models = mock_models
         self.diagnoser._client = mock_client
 
         response = self.diagnoser.diagnose(
@@ -115,7 +116,7 @@ class TestBugDiagnoser(unittest.TestCase):
 
         self.assertEqual(response.confidence_score, 0.95)
         self.assertIn("Pydantic model validation failure", response.summary)
-        mock_client.beta.chat.completions.parse.assert_called_once()
+        mock_models.generate_content.assert_called_once()
 
 
 class TestBugTraceEngine(unittest.TestCase):

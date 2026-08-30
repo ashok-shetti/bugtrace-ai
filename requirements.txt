@@ -5,4 +5,5 @@ pgvector>=0.2.5
 requests>=2.31.0
 sentence-transformers>=2.5.1
 python-dotenv>=1.0.1
-openai>=1.14.0
+google-genai>=1.0.0
+streamlit>=1.32.0

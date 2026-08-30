@@ -10,6 +10,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+# Reconfigure stdout/stderr to utf-8 for Windows emoji compatibility
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # Add workspace root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
