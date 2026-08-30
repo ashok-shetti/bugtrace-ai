@@ -2,10 +2,11 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.32+-FF4B4B?style=flat&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-Structured%20Outputs-4285F4?style=flat&logo=google&logoColor=white)](https://ai.google.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-4169E1?style=flat&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![pgvector](https://img.shields.io/badge/pgvector-0.5.0-blue?style=flat)](https://github.com/pgvector/pgvector)
 [![Sentence--Transformers](https://img.shields.io/badge/Sentence--Transformers-all--MiniLM--L6--v2-orange?style=flat)](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
-[![OpenAI](https://img.shields.io/badge/OpenAI-Structured%20Outputs-412991?style=flat&logo=openai&logoColor=white)](https://platform.openai.com/docs/guides/structured-outputs)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 
 BugTrace AI is an enterprise-grade Retrieval-Augmented Generation (RAG) platform designed to dramatically reduce Mean Time to Resolution (MTTR) for software engineering and SRE teams. By coupling parallel dense semantic search (`pgvector`) and full-text keyword search (`tsvector`) via Reciprocal Rank Fusion (RRF), BugTrace AI grounds LLM diagnoses in historical closed GitHub issue resolutions and maintainer fix commits, delivering deterministic, type-safe root-cause analyses without hallucinations.
@@ -68,7 +69,7 @@ BugTrace AI is an enterprise-grade Retrieval-Augmented Generation (RAG) platform
                                                       v
                                   +---------------------------------------+
                                   |          core/llm_prompt.py           |
-                                  |       OpenAI Structured Outputs       |
+                                  |      Google Gemini Structured Outputs |
                                   |  (Pydantic BugDiagnosisResponse Type) |
                                   +-------------------+-------------------+
                                                       |
@@ -81,7 +82,10 @@ BugTrace AI is an enterprise-grade Retrieval-Augmented Generation (RAG) platform
                                   +-------------------+-------------------+
                                                       |
                                                       v
-                                            Client / SRE Consumer
+                                  +---------------------------------------+
+                                  |               ui/app.py               |
+                                  |     Streamlit Developer Console       |
+                                  +---------------------------------------+
 ```
 
 ---
@@ -102,9 +106,10 @@ $$\text{RRF\_Score}(d) = \sum_{m \in \{\text{vector}, \text{keyword}\}} \frac{1}
 
 where $k = 60$ is the standard smoothing parameter. This guarantees top ranking for documents that excel in either exact keyword matching, semantic intent, or both.
 
-### 3. Type-Safe Structured Inference via Pydantic
+### 3. Type-Safe Structured Inference via Google Gemini & Pydantic
 * **Eliminating LLM Markdown Hallucinations**: Prompting LLMs with standard free-form text or raw JSON instructions frequently results in malformed syntax, unquoted keys, or conversational filler.
-* **OpenAI Structured Outputs**: Utilizing `client.beta.chat.completions.parse(response_format=BugDiagnosisResponse, temperature=0.1)` strictly constrains the token sampling to the context-free grammar (CFG) of our Pydantic schema, guaranteeing valid JSON serialization for downstream microservices.
+* **Gemini Structured Outputs**: Utilizes `client.models.generate_content(config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=BugDiagnosisResponse))` to strictly constrain token generation to our Pydantic schema, guaranteeing valid JSON deserialization.
+* **Resilient Multi-Model Fallback**: Automatically retries across available Gemini models (`gemini-3.6-flash`, `gemini-2.5-flash`, `gemini-3.5-flash`, `gemini-flash-latest`) if transient load spikes occur.
 * **Enforced Attribution**: The schema explicitly mandates a list of `ReferencedBug` objects containing the specific historical issue numbers and justification reasons that grounded the fix.
 
 ---
@@ -160,7 +165,7 @@ USING hnsw (embedding vector_cosine_ops);
 
 ```text
 BugTrace AI/
-├── .env.example               # Template for DB credentials, GitHub token & OpenAI key
+├── .env.example               # Template for DB credentials, GitHub token & Gemini API key
 ├── docker-compose.yml         # Containerized PostgreSQL 16 + pgvector setup
 ├── requirements.txt           # Production Python dependencies
 ├── core/                      # Core Retrieval & Inference Engine
@@ -169,7 +174,7 @@ BugTrace AI/
 │   ├── db_schema.sql          # DDL migrations, HNSW index & GIN tsvector index
 │   ├── embedding.py           # Sentence-Transformers embedding manager (all-MiniLM-L6-v2)
 │   ├── engine.py              # BugTraceEngine orchestrator facade
-│   ├── llm_prompt.py          # Grounded prompt formatter & OpenAI Structured Outputs
+│   ├── llm_prompt.py          # Grounded prompt formatter & Google Gemini Structured Outputs
 │   ├── retriever.py           # Parallel CTE Hybrid Search (pgvector + tsvector via RRF)
 │   ├── schemas.py             # Core Pydantic response models (BugDiagnosisResponse)
 │   ├── test_diagnosis.py      # Standalone CLI diagnosis runner & verification script
@@ -185,11 +190,13 @@ BugTrace AI/
 │   ├── main.py                # Lifespan context manager, CORS & latency middleware
 │   ├── routes.py              # REST route definitions (/diagnose, /search, /ingest)
 │   └── schemas.py             # API request/response validation schemas
+├── ui/                        # Streamlit Frontend Layer
+│   └── app.py                 # Modern, minimal developer incident & error console
 ├── tests/                     # Automated Test Suite (35 Unit & Integration Tests)
 │   ├── test_api.py            # FastAPI TestClient endpoint verification
 │   ├── test_embedding_and_db.py # Embedding dimension & DB adapter tests
 │   ├── test_etl.py            # Code-block preservation, bot & checklist filter tests
-│   ├── test_llm_diagnosis.py  # Prompt formatting, Pydantic validation & mock LLM tests
+│   ├── test_llm_diagnosis.py  # Prompt formatting, Pydantic validation & Gemini mock tests
 │   └── test_retriever.py      # Hybrid RRF CTE query & parameter serialization tests
 └── data/                      # Local data artifacts
     ├── raw/issues.json        # Raw extracted issues from GitHub
@@ -201,9 +208,9 @@ BugTrace AI/
 ## Quickstart & Setup Instructions
 
 ### 1. Prerequisites
-- **Python 3.11+**
-- **Docker & Docker Compose**
-- **Git**
+* **Python 3.11+**
+* **Docker & Docker Compose**
+* **Git**
 
 ### 2. Environment Setup
 ```bash
@@ -215,7 +222,7 @@ cd "BugTrace AI"
 python -m venv .venv
 
 # On Windows (PowerShell):
-.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 # On Linux / macOS:
 source .venv/bin/activate
 
@@ -235,7 +242,8 @@ DB_USER=postgres
 DB_PASSWORD=postgres
 DB_NAME=bugtrace_db
 GITHUB_TOKEN=ghp_your_token_here     # Optional: enables 5,000 req/hr GitHub rate limit
-OPENAI_API_KEY=sk-your_openai_key    # Required for live LLM diagnosis
+GEMINI_API_KEY=AIzaSy_your_key_here  # Required for live LLM diagnosis (Google AI Studio)
+GEMINI_MODEL=gemini-3.6-flash        # Optional: default model (gemini-3.6-flash)
 ```
 
 ### 4. Start PostgreSQL with pgvector
@@ -256,9 +264,18 @@ python etl/ingest_pipeline.py --init-db
 ```bash
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-Interactive API documentation is now live at `http://localhost:8000/docs`.
+Interactive API documentation is now live at:
+* Swagger UI: `http://localhost:8000/docs`
+* ReDoc: `http://localhost:8000/redoc`
 
-### 7. Run Test Suite
+### 7. Start the Streamlit Frontend Console
+In a separate terminal:
+```bash
+streamlit run ui/app.py
+```
+Open your browser at `http://localhost:8501`.
+
+### 8. Run Test Suite
 ```bash
 python -m unittest discover tests -v
 ```
@@ -268,7 +285,7 @@ python -m unittest discover tests -v
 ## API Documentation & Sample Payloads
 
 ### 1. End-to-End Bug Diagnosis (`POST /api/v1/diagnose`)
-Executes hybrid search to retrieve the top historical matches, constructs the grounded prompt, and calls the LLM with Structured Outputs.
+Executes hybrid search to retrieve the top historical matches, constructs the grounded prompt, and calls Gemini with Structured Outputs.
 
 #### Request:
 ```bash
